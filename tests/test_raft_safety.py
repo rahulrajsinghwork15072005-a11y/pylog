@@ -11,7 +11,6 @@ never take over, and nothing ever cleared it.
 
 import random
 
-import pytest
 
 from pylog.raft import RaftNode
 from pylog.sim import SimCluster
@@ -70,9 +69,6 @@ def test_prevote_exact_majority_starts_real_election():
 def test_prevote_without_majority_does_not_start_election():
     node, transport, clock = make_node()
     node.tick(clock.now)
-    denials = [m for _d, m in transport.sent if m["type"] == "prevote_resp"]
-    for m in denials:
-        pass
     # zero grants -> must stay in prevote/follower state, never candidate
     assert not any(
         m["type"] == "vote" for _d, m in transport.sent
@@ -113,3 +109,4 @@ def test_transfer_to_dead_peer_aborts_and_unblocks_propose():
     assert c.nodes[live_leader].transfer_target is None
 
     assert c.propose_via_leader(b"after-abort") is True
+
