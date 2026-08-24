@@ -198,6 +198,7 @@ class RaftNode:
         self.next_heartbeat = 0.0
         self.next_quorum_check = 0.0
         self.transfer_target = None
+        self.transfer_deadline = 0.0
         self._prevote_term = 0
 
         if self.snapshot_dir:
@@ -218,13 +219,19 @@ class RaftNode:
         if self.role == Role.LEADER:
             dues = [self.next_heartbeat, self.next_quorum_check]
             if self.transfer_target:
-                pass
+                dues.append(self.transfer_deadline)
             return min(dues)
         return self.election_deadline
 
     def tick(self, now: float | None = None) -> None:
         now = self.clock() if now is None else now
         if self.role == Role.LEADER:
+            if self.transfer_target and now >= self.transfer_deadline:
+                # target never took over (crashed / too far behind):
+                # abort the transfer so this leader resumes proposing
+                self.transfer_target = None
+                self.transfer_deadline = 0.0
+                self._send_all_appends()
             if now >= self.next_heartbeat:
                 self._send_all_appends()
                 self.next_heartbeat = now + self.heartbeat_interval
@@ -249,7 +256,9 @@ class RaftNode:
         if self.use_prevote and not self.pre_candidate:
             self.pre_candidate = True
             self._prevote_term = self.persister.current_term + 1
-            self.votes = set()
+            # count ourselves, exactly like a real election: a majority of
+            # the CLUSTER must grant, not every remaining peer
+            self.votes = {self.id}
             last_term, last_index = self._progress()
             for p in self.peers:
                 self.transport.send(
@@ -298,6 +307,7 @@ class RaftNode:
         self.leader_id = self.id
         self.pre_candidate = False
         self.transfer_target = None
+        self.transfer_deadline = 0.0
         now = self.clock()
         self.match_index = {}
         self.next_index = {}
@@ -317,6 +327,7 @@ class RaftNode:
         self.role = Role.FOLLOWER
         self.pre_candidate = False
         self.transfer_target = None
+        self.transfer_deadline = 0.0
         self._reset_election_deadline()
 
     # ------------------------------------------------------------ client API
@@ -334,6 +345,7 @@ class RaftNode:
         if self.role != Role.LEADER or target not in self.peers:
             return False
         self.transfer_target = target
+        self.transfer_deadline = self.clock() + (self.election_max * 2)
         self.transport.send(target, {"type": "timeout_now", "term": self.persister.current_term})
         return True
 
@@ -522,9 +534,10 @@ class RaftNode:
     # ------------------------------------------------------------- leader ops
 
     def _send_all_appends(self) -> None:
+        # keep streaming AppendEntries to the transfer target too: it can only
+        # take over once its log has caught up; the deadline in tick() aborts
+        # the transfer if that never happens.
         for p in self.peers:
-            if p == self.transfer_target:
-                continue
             self._send_append(p)
 
     def _send_append(self, peer: str) -> None:
@@ -677,3 +690,4 @@ class RaftNode:
             "commit": self.commit_index,
             "applied": self.applied_index,
         }
+
