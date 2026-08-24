@@ -103,7 +103,10 @@ class SimCluster:
     def restart(self, node_id: str) -> None:
         self.crashed.discard(node_id)
         old = self.nodes[node_id]
-        sm = self.state_machines[node_id]
+        # simulate loss of volatile state: create a FRESH state machine so
+        # the full-log replay in _apply_committed starts from a clean slate.
+        sm = KVStore()
+        self.state_machines[node_id] = sm
         node = self._build_node(node_id, self.transport, sm)
         node.persister.current_term = old.persister.current_term
         node.persister.voted_for = old.persister.voted_for
@@ -215,3 +218,4 @@ class SimCluster:
         for log in self.logs.values():
             total += sum(1 for e in log.entries if bytes(e["payload"]) == NOOP.encode())
         return total
+
