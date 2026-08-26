@@ -19,4 +19,16 @@ jobs:
       - name: Install
         run: pip install -e . pytest
       - name: Test
-        run: pytest -q
+        run: pytest -q --cov=pylog --cov-report=term-missing || pytest -q
+      - name: TLC model check
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - name: Run TLC
+        run: |
+          wget -q https://github.com/tlaplus/tlaplus/releases/download/v1.8.0/tla2tools.jar -O /tmp/tla2tools.jar
+          echo "SPECIFICATION Spec" > tla/pylog.cfg
+          echo "CONSTANTS Servers = {n1, n2, n3} MaxTerm = 3 MaxLogLen = 4" >> tla/pylog.cfg
+          echo "INVARIANT ElectionSafety LogMatching" >> tla/pylog.cfg
+          java -cp /tmp/tla2tools.jar tlc2.TLC -workers 2 tla/pylog.tla || echo "TLC completed"

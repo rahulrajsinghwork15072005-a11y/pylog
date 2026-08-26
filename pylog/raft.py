@@ -165,6 +165,9 @@ class RaftNode:
     ) -> None:
         self.id = node_id
         self.peers = [p for p in peers if p != node_id]
+        self.config = set([self.id] + self.peers)
+        self.old_config: set[str] | None = None
+        self.joint_index = 0
         self.transport = transport
         self.clock = clock
         self.rng = rng or random.Random(hash(node_id) & 0xFFFF)
@@ -214,6 +217,16 @@ class RaftNode:
             base += self.rng.uniform(0, 50)
         self.election_deadline = now + base
         return self.election_deadline
+
+    def _has_majority(self, voters: set[str]) -> bool:
+        """Joint consensus: if in joint, need majority in both old and new."""
+        if self.old_config is not None:
+            old_needed = len(self.old_config) // 2 + 1
+            new_needed = len(self.config) // 2 + 1
+            old_votes = len(voters & self.old_config)
+            new_votes = len(voters & self.config)
+            return old_votes >= old_needed and new_votes >= new_needed
+        return len(voters) > len(self.config) // 2
 
     def next_event_due(self) -> float:
         if self.role == Role.LEADER:
@@ -298,8 +311,7 @@ class RaftNode:
             self._become_leader()
 
     def _maybe_win(self) -> None:
-        cluster = len(self.peers) + 1
-        if self.role == Role.CANDIDATE and len(self.votes) > cluster // 2:
+        if self.role == Role.CANDIDATE and self._has_majority(self.votes):
             self._become_leader()
 
     def _become_leader(self) -> None:
@@ -349,6 +361,43 @@ class RaftNode:
         self.transport.send(target, {"type": "timeout_now", "term": self.persister.current_term})
         return True
 
+    def propose_add_server(self, new_id: str) -> int | None:
+        if self.role != Role.LEADER or new_id in self.config or self.old_config is not None:
+            return None
+        new_servers = set(self.config) | {new_id}
+        return self._propose_config(new_servers)
+
+    def propose_remove_server(self, rm_id: str) -> int | None:
+        if self.role != Role.LEADER or rm_id not in self.config or rm_id == self.id or self.old_config is not None:
+            return None
+        if len(self.config) <= 2:
+            return None
+        new_servers = set(self.config) - {rm_id}
+        return self._propose_config(new_servers)
+
+    def _propose_config(self, new_servers: set[str]) -> int | None:
+        # Joint consensus: old → joint (old ∪ new) → new
+        old = set(self.config)
+        joint = old | new_servers
+        # Enter joint if not already
+        if self.old_config is None:
+            self.old_config = old
+            self.config = joint
+            self.joint_index = self.log.last_index + 1
+            # initialise tracking for new peers
+            for p in new_servers:
+                if p != self.id and p not in self.next_index:
+                    self.next_index[p] = self.log.last_index + 1
+                    self.match_index[p] = 0
+                    self.last_peer_ack[p] = self.clock()
+            self.peers = sorted([p for p in self.config if p != self.id])
+        payload = b"__cfg:" + json.dumps({"servers": sorted(new_servers)}).encode()
+        entry = self.log.append_entry(self.persister.current_term, payload)
+        idx = entry["index"]
+        self._advance_commit()
+        self._send_all_appends()
+        return idx
+
     # -------------------------------------------------------------- inbound
 
     def handle(self, msg: dict) -> None:
@@ -372,7 +421,7 @@ class RaftNode:
             return
         if m["granted"]:
             self.votes.add(m["from"])
-        if len(self.votes) > (len(self.peers) + 1) // 2:
+        if self._has_majority(self.votes):
             self.pre_candidate = False
             self._start_election()
         elif not m["granted"]:
@@ -575,30 +624,90 @@ class RaftNode:
         )
 
     def _advance_commit(self) -> None:
-        matches = sorted(
-            [self.log.last_index] + [mi for p, mi in self.match_index.items() if p != self.id],
-            reverse=True,
-        )
-        needed = (len(self.peers) + 1) // 2 + 1
-        if len(matches) >= needed:
-            candidate = matches[needed - 1]
-            current_term_ok = self.log.term_at(candidate) == self.persister.current_term
-            if candidate > self.commit_index and current_term_ok:
-                self.commit_index = candidate
-                self._apply_committed()
+        # Joint consensus: candidate must be on majority in both old and new when in joint
+        for candidate in range(self.log.last_index, self.commit_index, -1):
+            if self.log.term_at(candidate) != self.persister.current_term:
+                continue
+            # count how many in config have this index
+            have = 1  # leader itself has it if candidate <= last_index
+            for p, mi in self.match_index.items():
+                if mi >= candidate:
+                    have_config = 1
+                else:
+                    have_config = 0
+                # for joint we need to track separately, but we can count per config below
+                _ = have_config
+            if self.old_config is not None:
+                old_needed = len(self.old_config) // 2 + 1
+                new_needed = len(self.config) // 2 + 1
+                old_have = (1 if self.id in self.old_config else 0)
+                new_have = 1  # leader in new config (config includes leader)
+                for p, mi in self.match_index.items():
+                    if mi >= candidate:
+                        if p in self.old_config:
+                            old_have += 1
+                        if p in self.config:
+                            new_have += 1
+                # also account leader if not in config? leader is always in both when in joint (since joint = old ∪ new)
+                if old_have >= old_needed and new_have >= new_needed:
+                    self.commit_index = candidate
+                    self._apply_committed()
+                    return
+            else:
+                # single config
+                needed = len(self.config) // 2 + 1
+                have = 1
+                for p, mi in self.match_index.items():
+                    if mi >= candidate and p in self.config:
+                        have += 1
+                if have >= needed:
+                    self.commit_index = candidate
+                    self._apply_committed()
+                    return
 
     def _apply_committed(self) -> None:
-        if self.state_machine is None:
-            self.applied_index = self.commit_index
-            return
+        # Handle config entries even when state_machine is None
         while self.applied_index < self.commit_index:
             nxt = self.applied_index + 1
             entry = self.log.get(nxt)
             if entry is None:
+                if self.state_machine is None:
+                    self.applied_index = self.commit_index
+                    return
                 break
+            payload = entry["payload"]
+            is_cfg = payload and bytes(payload).startswith(b"__cfg:")
+            if is_cfg:
+                try:
+                    data = json.loads(bytes(payload)[6:].decode())
+                    new_servers = set(data.get("servers", []))
+                    if new_servers:
+                        self.config = set(new_servers)
+                        self.peers = sorted([p for p in self.config if p != self.id])
+                        # initialise tracking for new peers
+                        for p in self.config:
+                            if p != self.id and p not in self.next_index:
+                                self.next_index[p] = self.log.last_index + 1
+                                self.match_index[p] = 0
+                                self.last_peer_ack[p] = self.clock()
+                        # cleanup removed peers
+                        for p in list(self.next_index.keys()):
+                            if p not in self.config:
+                                self.next_index.pop(p, None)
+                                self.match_index.pop(p, None)
+                                self.last_peer_ack.pop(p, None)
+                        self.old_config = None
+                        self.joint_index = 0
+                except Exception:
+                    pass
+                self.applied_index = nxt
+                continue
+            if self.state_machine is None:
+                self.applied_index = nxt
+                continue
             result = None
-            if entry["payload"] and not bytes(entry["payload"]).startswith(b"__raft_noop__"):
-                result = self.state_machine.apply(entry["payload"])
+            if payload and not bytes(payload).startswith(b"__raft_noop__"):
+                result = self.state_machine.apply(payload)
             self.applied_index = nxt
             if self.on_apply:
                 self.on_apply(self.id, entry["index"], entry["payload"], result)
@@ -612,10 +721,20 @@ class RaftNode:
 
     def _check_quorum(self, now: float) -> None:
         ack_window = self.election_max * 2
+        if self.old_config is not None:
+            old_alive = (1 if self.id in self.old_config else 0) + sum(
+                1 for p in self.old_config if p != self.id and now - self.last_peer_ack.get(p, -1e18) <= ack_window
+            )
+            new_alive = 1 + sum(
+                1 for p in self.config if p != self.id and now - self.last_peer_ack.get(p, -1e18) <= ack_window
+            )
+            if old_alive <= len(self.old_config) // 2 or new_alive <= len(self.config) // 2:
+                self._step_down(self.persister.current_term)
+            return
         alive = 1 + sum(
-            1 for p in self.peers if now - self.last_peer_ack.get(p, -1e18) <= ack_window
+            1 for p in self.config if p != self.id and now - self.last_peer_ack.get(p, -1e18) <= ack_window
         )
-        if alive <= (len(self.peers) + 1) // 2:
+        if alive <= len(self.config) // 2:
             self._step_down(self.persister.current_term)
 
     # ------------------------------------------------------------- snapshots
@@ -668,15 +787,23 @@ class RaftNode:
     # -------------------------------------------------------- linearizable reads
 
     def can_serve_linearizable_read(self) -> bool:
-        """Leader-lease read: safe only while a majority acknowledged recently."""
+        """Leader-lease read: safe only while a majority acknowledged recently (joint-aware)."""
         if self.role != Role.LEADER:
             return False
         now = self.clock()
         window = self.election_min
+        if self.old_config is not None:
+            old_fresh = sum(
+                1 for p in self.old_config if p != self.id and now - self.last_peer_ack.get(p, -1e18) <= window
+            ) + (1 if self.id in self.old_config else 0)
+            new_fresh = sum(
+                1 for p in self.config if p != self.id and now - self.last_peer_ack.get(p, -1e18) <= window
+            ) + 1
+            return old_fresh > len(self.old_config) // 2 and new_fresh > len(self.config) // 2
         fresh = sum(
-            1 for p in self.peers if now - self.last_peer_ack.get(p, -1e18) <= window
+            1 for p in self.config if p != self.id and now - self.last_peer_ack.get(p, -1e18) <= window
         )
-        return 1 + fresh > (len(self.peers) + 1) // 2
+        return 1 + fresh > len(self.config) // 2
 
     # ------------------------------------------------------------------ info
 

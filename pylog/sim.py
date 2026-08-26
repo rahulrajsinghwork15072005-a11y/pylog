@@ -148,6 +148,8 @@ class SimCluster:
         self.clock = max(self.clock, due)
         if dest in self.crashed:
             return True
+        if dest not in self.nodes:
+            return True
         src = msg.get("candidate") or msg.get("leader") or msg.get("from")
         if src and frozenset((src, dest)) in self.partitioned:
             return True

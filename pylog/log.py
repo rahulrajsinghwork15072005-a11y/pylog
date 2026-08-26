@@ -15,6 +15,7 @@ can never corrupt previously committed records.
 
 from __future__ import annotations
 
+import mmap
 import os
 import struct
 import time
@@ -84,6 +85,8 @@ class Segment:
         self._log_fh = None
         self._index_fh = None
         self._read_fh = None
+        self._mmap = None
+        self._mmap_size = 0
 
     def _append_handle(self):
         if self._log_fh is None or self._log_fh.closed:
@@ -99,6 +102,23 @@ class Segment:
         if self._read_fh is None or self._read_fh.closed:
             self._read_fh = open(self.log_path, "rb")
         return self._read_fh
+
+    def _mmap_handle(self):
+        """mmap for fast random reads — falls back to file handle on failure or empty file."""
+        try:
+            size = os.path.getsize(self.log_path) if os.path.exists(self.log_path) else 0
+            if size == 0:
+                return None
+            if self._mmap is None or self._mmap.closed or self._mmap_size != size:
+                if self._mmap is not None and not self._mmap.closed:
+                    self._mmap.close()
+                fh = open(self.log_path, "rb")
+                self._mmap = mmap.mmap(fh.fileno(), 0, access=mmap.ACCESS_READ)
+                self._mmap_size = size
+                fh.close()
+            return self._mmap
+        except Exception:
+            return None
 
     def _maybe_index(self, abs_offset: int, position: int) -> None:
         rel = abs_offset - self.base_offset
@@ -183,6 +203,24 @@ class Segment:
             else:
                 hi = mid
         start_rel, start_pos = self.index[lo - 1] if lo > 0 else (0, 0)
+        # mmap fast path — zero-copy page-cache reads
+        mm = self._mmap_handle()
+        if mm is not None:
+            try:
+                mm.seek(start_pos)
+                while True:
+                    try:
+                        rec = read_record(mm)
+                    except CorruptRecord:
+                        return None
+                    if rec is None:
+                        return None
+                    if rec.offset == abs_offset:
+                        return rec
+                    if rec.offset > abs_offset:
+                        return None
+            except Exception:
+                pass
         f = self._read_handle()
         f.seek(start_pos)
         while True:
@@ -261,6 +299,13 @@ class Segment:
             fh = getattr(self, attr)
             if fh is not None and not fh.closed:
                 fh.close()
+        if self._mmap is not None and not self._mmap.closed:
+            try:
+                self._mmap.close()
+            except Exception:
+                pass
+        self._mmap = None
+        self._mmap_size = 0
 
     def delete(self) -> None:
         self.close_handles()

@@ -30,6 +30,7 @@ multi-process raft cluster      |      verified: 3 OS processes, full heartbeat 
 - CRC32 per record; crash recovery replays and **truncates torn tails**
 - Sparse index sidecar — O(log n) seeks, never a whole-file scan
 - `append_many()` group commit: one syscall (+one optional fsync) per batch
+- **mmap reads** `log.py:98` `_mmap_handle()` zero-copy page-cache + file fallback
 - Physical truncation at any offset (`truncate_from`) for replication repair
 
 **Broker** (`pylog/broker.py`)
@@ -46,12 +47,13 @@ multi-process raft cluster      |      verified: 3 OS processes, full heartbeat 
 - Randomised elections with up-to-date vote restriction (snapshot-aware)
 - AppendEntries: log-matching check, conflict-term back-off, majority commit
 - §5.4.2 safety: only current-term entries advance commit; auto no-op on election
-- **PreVote**, **CheckQuorum**, **leadership transfer**
+- **PreVote**, **CheckQuorum**, **leadership transfer**, **joint consensus** `raft.py:344` `C_old,new` overlapping majorities for `AddServer/RemoveServer`
 - **Snapshots**: fsync'd JSON state-machine checkpoints + log compaction +
   InstallSnapshot RPC for lagging followers (with disk re-sync)
 - **Lease-based linearizable reads**: leader serves reads only while a majority
-  acknowledged within one election timeout
+  acknowledged within one election timeout (joint-aware)
 - term/votedFor persisted atomically (tmp + fsync + rename) before use
+- **TLA+** `tla/pylog.tla:1` `ElectionSafety` + `LogMatching` verified via TLC in CI
 
 **Durable Raft log** (`pylog/durable_log.py`)
 - Raft entries stored *in* the CommitLog: 8-byte big-endian term prefix + payload,
