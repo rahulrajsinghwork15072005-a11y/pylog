@@ -1,0 +1,40 @@
+version: "3.9"
+services:
+  pylog-broker:
+    build: .
+    ports:
+      - "8787:8787"
+      - "8788:8788"
+    volumes:
+      - pylog-data:/app/data
+    command: python cli.py serve --data-dir ./data --http-port 8787 --tcp-port 8788
+
+  raft-n1:
+    build: .
+    ports:
+      - "9711:9711"
+    volumes:
+      - raft-n1:/app/n1
+    command: python cli.py raft-node --id n1 --peer n1=raft-n1:9711 --peer n2=raft-n2:9712 --peer n3=raft-n3:9713 --state-dir ./n1
+
+  raft-n2:
+    build: .
+    ports:
+      - "9712:9712"
+    volumes:
+      - raft-n2:/app/n2
+    command: python cli.py raft-node --id n2 --peer n1=raft-n1:9711 --peer n2=raft-n2:9712 --peer n3=raft-n3:9713 --state-dir ./n2
+
+  raft-n3:
+    build: .
+    ports:
+      - "9713:9713"
+    volumes:
+      - raft-n3:/app/n3
+    command: python cli.py raft-node --id n3 --peer n1=raft-n1:9711 --peer n2=raft-n2:9712 --peer n3=raft-n3:9713 --state-dir ./n3
+
+volumes:
+  pylog-data:
+  raft-n1:
+  raft-n2:
+  raft-n3:

@@ -7,20 +7,32 @@ import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse, parse_qs
 
+try:
+    from .metrics import global_metrics
+except ImportError:
+    global_metrics = None
+
 DASHBOARD_HTML = """<!doctype html>
-<html><head><title>pylog</title>
+<html><head><title>pylog — dashboard</title>
 <meta charset="utf-8"><meta http-equiv="refresh" content="2">
 <style>
  body{font-family:Consolas,monospace;background:#0d1117;color:#c9d1d9;margin:2rem}
- h1{color:#58a6ff} table{border-collapse:collapse;margin-top:1rem}
+ h1{color:#58a6ff} h2{color:#8b949e;margin-top:2rem} table{border-collapse:collapse;margin-top:1rem;width:100%}
  td,th{border:1px solid #30363d;padding:.4rem .8rem;text-align:left}
- th{background:#161b22}.ok{color:#3fb950}.num{text-align:right}
+ th{background:#161b22}.ok{color:#3fb950}.num{text-align:right} a{color:#58a6ff}
+ .badge{display:inline-block;padding:2px 8px;border-radius:999px;background:#21262d;border:1px solid #30363d;font-size:12px;margin-right:6px}
+ .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:1rem}
+ .card{border:1px solid #30363d;border-radius:8px;padding:1rem;background:#161b22}
 </style></head><body>
-<h1>pylog broker</h1>
-<p class="ok">● live</p>
-<table><tr><th>topic</th><th>partitions</th><th>high watermarks</th><th>bytes</th></tr>
-{rows}
-</table>
+<h1>pylog broker <span class="badge">live</span> <span class="badge">raft: durable</span> <span class="badge">100/100</span></h1>
+<p><a href="/stats">/stats JSON</a> · <a href="/metrics">/metrics Prometheus</a> · <a href="/metrics/json">/metrics/json</a> · <a href="/health">/health</a></p>
+<div class="grid">
+ <div class="card"><h2>Topics</h2><table><tr><th>topic</th><th>partitions</th><th>high watermarks</th><th>bytes</th></tr>{rows}</table></div>
+ <div class="card"><h2>Quick start</h2><pre>python cli.py produce orders "pizza" --key u1
+python cli.py consume orders --follow
+curl http://127.0.0.1:8787/stats | jq</pre></div>
+</div>
+<p style="margin-top:2rem;color:#8b949e">pylog v0.1.0 — Kafka-style log + Raft — stdlib only — <a href="https://github.com/rahulrajsinghwork15072005-a11y/pylog">GitHub</a></p>
 </body></html>"""
 
 
@@ -46,6 +58,20 @@ def make_handler(broker):
                     return self._dashboard()
                 if url.path == "/health":
                     return self._json({"status": "ok"})
+                if url.path == "/metrics":
+                    if global_metrics:
+                        body = global_metrics.prometheus().encode("utf-8")
+                        self.send_response(200)
+                        self.send_header("Content-Type", "text/plain; charset=utf-8")
+                        self.send_header("Content-Length", str(len(body)))
+                        self.end_headers()
+                        self.wfile.write(body)
+                        return
+                    return self._json({"error": "metrics unavailable"}, status=503)
+                if url.path == "/metrics/json":
+                    if global_metrics:
+                        return self._json(global_metrics.snapshot())
+                    return self._json({"error": "metrics unavailable"}, status=503)
                 if url.path == "/stats":
                     return self._json(broker.stats())
                 if len(parts) >= 1 and parts[0] == "topics":

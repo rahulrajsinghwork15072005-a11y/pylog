@@ -1,0 +1,49 @@
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: pylog-raft
+spec:
+  serviceName: pylog-raft
+  replicas: 3
+  selector:
+    matchLabels:
+      app: pylog-raft
+  template:
+    metadata:
+      labels:
+        app: pylog-raft
+    spec:
+      containers:
+        - name: pylog
+          image: pylog:0.1.0
+          ports:
+            - containerPort: 9711
+          env:
+            - name: NODE_ID
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+          command: ["python", "cli.py", "raft-node", "--id", "$(NODE_ID)", "--peer", "n1=pylog-raft-0.pylog-raft:9711", "--peer", "n2=pylog-raft-1.pylog-raft:9712", "--peer", "n3=pylog-raft-2.pylog-raft:9713", "--state-dir", "/data"]
+          volumeMounts:
+            - name: data
+              mountPath: /data
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources:
+          requests:
+            storage: 1Gi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: pylog-raft
+spec:
+  clusterIP: None
+  selector:
+    app: pylog-raft
+  ports:
+    - port: 9711
+      name: raft

@@ -109,8 +109,9 @@ def test_http_dashboard_serves_html(http_broker):
     req = urllib.request.Request(f"http://127.0.0.1:{gw.bound_port}/")
     with urllib.request.urlopen(req, timeout=5) as resp:
         html = resp.read().decode()
-    assert "<h1>pylog broker</h1>" in html
+    assert "pylog broker" in html
     assert "dash" in html
+    assert "/metrics" in html
 
 
 def test_http_error_paths_return_4xx(http_broker):
