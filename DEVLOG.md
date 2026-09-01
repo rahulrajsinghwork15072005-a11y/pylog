@@ -12,7 +12,7 @@ timeout every single time.
 
 The PreVote response handler counted votes like this:
 
-    if len(self.votes) > (len(self.peers) + 1) // 2:
+ if len(self.votes) > (len(self.peers) + 1) // 2:
 
 which looks right until you notice `votes` never contained the candidate
 itself. So on a healthy 3-node cluster, "majority" required *both* peers to
@@ -40,8 +40,8 @@ of virtual time later, `transfer_target` still set, proposals still dead.
 Two-part fix:
 
 1. keep replicating to the target during the handover (it needs the entries)
-2. arm a deadline of 2x election timeout; `tick()` aborts the transfer when
-   it passes, clearing the target so the old leader resumes proposing
+2. arm a deadline of 2x election timeout; `tick` aborts the transfer when
+ it passes, clearing the target so the old leader resumes proposing
 
 Regression test runs the exact scenario in the simulator: elect, crash a
 follower, transfer to it, advance past the deadline, assert the leader
@@ -50,9 +50,9 @@ resumes committing.
 ## What the audit checked and found sound
 
 - commit-index advancement respects the current-term-only rule (paper 5.4.2),
-  with the leader's NOOP trick to make it kick in immediately after election
+ with the leader's NOOP trick to make it kick in immediately after election
 - AppendEntries conflict back-off returns the first index of the conflicting
-  term, not just index-1 (the optimization from the Raft dissertation)
+ term, not just index-1 (the optimization from the Raft dissertation)
 - vote/append handlers persist term changes before acting on them
 - snapshot install handles the already-have case and resyncs disk truncation
 - CheckQuorum steps down at <half-alive, matching the lease read heuristic

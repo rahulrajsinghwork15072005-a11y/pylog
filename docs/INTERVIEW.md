@@ -11,9 +11,9 @@
 
 ```
 Producer ─► Broker (topics → partitions) ─► append-only segmented log (durable)
-               │                              │ CRC + crash recovery
-Consumer ◄─────┘                              ▼
-                              Raft: elect → replicate → commit
+ │ │ CRC + crash recovery
+Consumer ◄─────┘ ▼
+ Raft: elect → replicate → commit
 ```
 
 Layers: **durable log → broker → replication → Raft** `ARCHITECTURE.md:5`

@@ -4,24 +4,24 @@ Built in layers; each layer depends only on the ones below it.
 
 ```
  cli.py · demo.py · raft_demo.py · bench.py
-        │
+ │
  ┌──────┴────────────────────────────────────────────────┐
- │ HTTP REST gateway          length-prefixed TCP frames │  net.py / api.py
+ │ HTTP REST gateway length-prefixed TCP frames │ net.py / api.py
  ├───────────────────────────────────────────────────────┤
- │ Broker: topics → partitions → consumer groups         │  broker.py
- │   crc32(key) routing · committed offsets · retention  │
+ │ Broker: topics → partitions → consumer groups │ broker.py
+ │ crc32(key) routing · committed offsets · retention │
  ├───────────────────────┬───────────────────────────────┤
- │ Raft: election →      │ DurableRaftLog: raft entries  │  raft.py /
- │ AppendEntries →       │ stored in CommitLog (term     │  durable_log.py
- │ majority commit       │ prefix, index = offset + 1)   │
- │ PreVote · CheckQuorum │ snapshots + InstallSnapshot   │
- │ transfer · lease reads│ disk==cache invariant         │
+ │ Raft: election → │ DurableRaftLog: raft entries │ raft.py /
+ │ AppendEntries → │ stored in CommitLog (term │ durable_log.py
+ │ majority commit │ prefix, index = offset + 1) │
+ │ PreVote · CheckQuorum │ snapshots + InstallSnapshot │
+ │ transfer · lease reads│ disk==cache invariant │
  ├───────────────────────┴───────────────────────────────┤
- │ CommitLog: segmented append-only log                  │  log.py
- │   CRC32 records · crash recovery · sparse index       │
- │   group-commit (append_many) · truncate_from          │
+ │ CommitLog: segmented append-only log │ log.py
+ │ CRC32 records · crash recovery · sparse index │
+ │ group-commit (append_many) · truncate_from │
  └───────────────────────────────────────────────────────┘
-        ▲
+ ▲
  sim.py — the same RaftNode code on a virtual clock with
  fault injection (crash / restart / partition / isolate)
 ```
@@ -42,7 +42,7 @@ Built in layers; each layer depends only on the ones below it.
 **Segments.** `<base_offset:020d>.log` + `.index` sidecar; zero-padded names sort
 lexically = chronologically. When the active segment passes `max_segment_bytes` it is
 sealed and a new one starts at the next offset. Writes are unbuffered (`buffering=0`)
-so data reaches the OS at `write()` time without a per-record flush syscall.
+so data reaches the OS at `write` time without a per-record flush syscall.
 
 **Sparse index.** One `(relative_offset, byte_position)` entry every
 `index_interval_bytes`. A read binary-searches for the nearest signpost at or before
@@ -53,8 +53,8 @@ bounds, and CRC. The first failure marks the end of good data; the file is
 truncated there and the index rebuilt from what survived. Worst case of a mid-write
 crash is losing the last unfinished record — never corrupting earlier ones.
 
-**Group commit.** `append_many()` encodes a batch into one contiguous buffer and
-issues a single `write()` (plus one optional `fsync`), then drops sparse-index
+**Group commit.** `append_many` encodes a batch into one contiguous buffer and
+issues a single `write` (plus one optional `fsync`), then drops sparse-index
 signposts for each record boundary. Batches of 256 reach ~1.5 M appends/sec —
 sequential I/O is the whole point of a log.
 
@@ -76,7 +76,7 @@ lag = high-watermark − committed − 1. Retention deletes segments older than
 
 Frames are `[u32 length][JSON]`. `FrameServer` is a thread-per-connection accept loop;
 handlers are isolated so one bad request can't kill the connection.
-`FrameClient.call()` is mutex-guarded so multiple threads can share one peer socket.
+`FrameClient.call` is mutex-guarded so multiple threads can share one peer socket.
 The HTTP gateway (stdlib `ThreadingHTTPServer`) exposes produce/consume/commit/stats
 and an auto-refreshing dashboard; consume-with-group auto-commits through the group's
 persisted offsets.
@@ -85,7 +85,7 @@ persisted offsets.
 
 The node is a pure state machine: messages in via `handle(dict)`, timers via
 `tick(now)`, output via injected `transport.send(dest, msg)`, time via injected
-`clock()`. No sockets, no threads, no global state — which is exactly why the same
+`clock`. No sockets, no threads, no global state — which is exactly why the same
 code runs unchanged under real TCP threads and inside the deterministic simulator.
 
 **Election.** Followers randomise timeouts in `[150, 300)` ms. With PreVote enabled,
@@ -112,7 +112,7 @@ prior-term work immediately.
 within 2 election timeouts. Leadership transfer sends `timeout_now` to the target,
 which starts a real election immediately (skipping PreVote).
 
-**Snapshots & InstallSnapshot.** `take_snapshot()` serialises the state machine to an
+**Snapshots & InstallSnapshot.** `take_snapshot` serialises the state machine to an
 fsync'd JSON checkpoint at the applied index and compacts the log head. A leader
 whose `next_index` for some peer has fallen below its first live entry can no longer
 send plain appends, so it ships the whole snapshot (`install_snapshot` RPC); the

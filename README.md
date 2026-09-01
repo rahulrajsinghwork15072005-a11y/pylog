@@ -1,4 +1,4 @@
-# pylog — 100/100 World-Class
+# pylog — 
 
 ![CI](https://github.com/rahulrajsinghwork15072005-a11y/pylog/actions/workflows/ci.yml/badge.svg)
 ![Python](https://img.shields.io/badge/python-3.10%20%7C%203.11%20%7C%203.12-blue)
@@ -9,18 +9,18 @@
 
 A Kafka-style **durable, partitioned, replicated commit log** built from scratch in
 pure-stdlib Python — with a full **Raft consensus** layer whose log is backed by the
-same crash-safe CommitLog that powers the broker. **Pristine 100/100**: TLA+ proofs, Jepsen fuzz, Prometheus metrics, Docker + k8s, live dashboard.
+same crash-safe CommitLog that powers the broker. **Pristine **: TLA+ proofs, Jepsen fuzz, Prometheus metrics, Docker + k8s, live dashboard.
 
 > **Zero dependencies.** TCP sockets + threading + a custom HTTP server.
 > Deterministic cluster simulator with a virtual clock — distributed behaviour tested
 > without sleeps or flakes. Runs as one process or as N independent OS processes/hosts.
 
 ```
-commit-log appends/sec          |    180,485
-commit-log group-commit/sec     |  1,489,089   (batches of 256, single write syscall)
-broker produce/sec              |     ~45,000
-raft election (virtual clock)   |      <300 ms simulated · <1 s wall
-multi-process raft cluster      |      verified: 3 OS processes, full heartbeat mesh
+commit-log appends/sec | 180,485
+commit-log group-commit/sec | 1,489,089 (batches of 256, single write syscall)
+broker produce/sec | ~45,000
+raft election (virtual clock) | <300 ms simulated · <1 s wall
+multi-process raft cluster | verified: 3 OS processes, full heartbeat mesh
 ```
 
 ## Features
@@ -29,8 +29,8 @@ multi-process raft cluster      |      verified: 3 OS processes, full heartbeat 
 - Append-only segmented design (`00000000000000000000.log`), size-rolled
 - CRC32 per record; crash recovery replays and **truncates torn tails**
 - Sparse index sidecar — O(log n) seeks, never a whole-file scan
-- `append_many()` group commit: one syscall (+one optional fsync) per batch
-- **mmap reads** `log.py:98` `_mmap_handle()` zero-copy page-cache + file fallback
+- `append_many` group commit: one syscall (+one optional fsync) per batch
+- **mmap reads** `log.py:98` `_mmap_handle` zero-copy page-cache + file fallback
 - Physical truncation at any offset (`truncate_from`) for replication repair
 
 **Broker** (`pylog/broker.py`)
@@ -49,15 +49,15 @@ multi-process raft cluster      |      verified: 3 OS processes, full heartbeat 
 - §5.4.2 safety: only current-term entries advance commit; auto no-op on election
 - **PreVote**, **CheckQuorum**, **leadership transfer**, **joint consensus** `raft.py:344` `C_old,new` overlapping majorities for `AddServer/RemoveServer`
 - **Snapshots**: fsync'd JSON state-machine checkpoints + log compaction +
-  InstallSnapshot RPC for lagging followers (with disk re-sync)
+ InstallSnapshot RPC for lagging followers (with disk re-sync)
 - **Lease-based linearizable reads**: leader serves reads only while a majority
-  acknowledged within one election timeout (joint-aware)
+ acknowledged within one election timeout (joint-aware)
 - term/votedFor persisted atomically (tmp + fsync + rename) before use
 - **TLA+** `tla/pylog.tla:1` `ElectionSafety` + `LogMatching` verified via TLC in CI
 
 **Durable Raft log** (`pylog/durable_log.py`)
 - Raft entries stored *in* the CommitLog: 8-byte big-endian term prefix + payload,
-  raft index `i` ↔ CommitLog offset `i - 1`
+ raft index `i` ↔ CommitLog offset `i - 1`
 - Invariant: `disk.next_offset == raft last_index` after every mutation
 - Conflict truncation physically rewrites segments; restart rebuilds from disk
 - Crash-recovery guarantees apply to the replicated log itself
@@ -70,11 +70,11 @@ multi-process raft cluster      |      verified: 3 OS processes, full heartbeat 
 
 ```bash
 pip install -e .
-python -m pytest          # 52 tests
-python demo.py            # durable log walkthrough incl. torn-write recovery
-python raft_demo.py       # live 3-node durable raft cluster over real sockets
-python cli.py replicate   # election → replicate → snapshot → leader crash → re-election
-python bench.py           # benchmarks above
+python -m pytest # 52 tests
+python demo.py # durable log walkthrough incl. torn-write recovery
+python raft_demo.py # live 3-node durable raft cluster over real sockets
+python cli.py replicate # election → replicate → snapshot → leader crash → re-election
+python bench.py # benchmarks above
 ```
 
 Single-node broker:
@@ -106,7 +106,7 @@ log = CommitLog("./data")
 off = log.append(b"hello")
 print(log.read(off).payload)
 
-raft_log = DurableRaftLog("./raft-wal")     # survives crashes like any pylog data
+raft_log = DurableRaftLog("./raft-wal") # survives crashes like any pylog data
 ```
 
 ## Design
@@ -124,7 +124,7 @@ checksum failure, so a crash mid-write can never corrupt committed data. Raft
 replicates this same log across nodes and commits entries once a majority stores
 them — and in pylog, Raft's own log *is* that same durable structure.
 
-## Docs & 100/100 checklist
+## Docs & checklist
 
 * **Interview guide** — `docs/INTERVIEW.md` 30-sec pitch + 5 Q&A (append-only, crash, election, LogMatching, virtual clock)
 * **Line-by-line** — `docs/WALKTHROUGH.md` `log.py:recover` + `append` + sparse index
